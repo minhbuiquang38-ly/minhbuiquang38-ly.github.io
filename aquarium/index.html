@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hồ Cá Thủy Sinh Sống Động</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+body{font-family:'Inter',system-ui,sans-serif;margin:0;overflow:hidden;background:#020c1b}
+canvas{display:block;width:100vw;height:100vh}
+.glass-overlay{position:absolute;inset:0;pointer-events:none;background:linear-gradient(135deg,rgba(255,255,255,.05) 0%,rgba(255,255,255,0) 50%,rgba(0,0,0,.15) 100%);box-shadow:inset 0 0 50px rgba(0,100,150,.3)}
+</style>
+</head>
+<body class="relative select-none">
+<canvas id="aquariumCanvas"></canvas>
+<div class="glass-overlay"></div>
+
+<div class="absolute left-6 right-6 flex flex-wrap justify-between items-center z-10 pointer-events-none" style="top:calc(1.5rem + env(safe-area-inset-top,0px))">
+  <div class="ui-panel pointer-events-auto bg-slate-900/70 backdrop-blur-md border border-cyan-500/30 px-5 py-3 rounded-2xl shadow-2xl text-white">
+    <h1 class="text-xl font-bold tracking-wide text-cyan-300 flex items-center gap-2"><span>🐠</span> Hồ Cá Thủy Sinh Nghệ Thuật</h1>
+    <p class="text-xs text-slate-300 mt-1">Chạm hoặc nhấp vào mặt nước để thả thức ăn & tạo sóng!</p>
+  </div>
+  <div class="ui-panel pointer-events-auto flex items-center gap-3 mt-2 sm:mt-0">
+    <button id="feedBtn" class="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold px-4 py-2.5 rounded-xl shadow-lg shadow-cyan-500/30 transition transform active:scale-95 text-sm flex items-center gap-2 border border-cyan-400/40"><span>🦐</span> Thả Thức Ăn</button>
+    <button id="soundBtn" class="bg-slate-900/70 hover:bg-slate-800 text-cyan-300 border border-cyan-500/30 font-semibold px-4 py-2.5 rounded-xl shadow-lg transition transform active:scale-95 text-sm flex items-center gap-2"><span id="soundIcon">🔇</span> <span id="soundText">Bật Âm Thanh</span></button>
+  </div>
+</div>
+<div class="absolute bottom-4 left-6 text-cyan-200/60 text-xs pointer-events-none hidden sm:block">Mẹo: Cá sẽ tự động bơi lội, tìm thức ăn và tránh né vật cản.</div>
+
+<script>
+const canvas = document.getElementById('aquariumCanvas');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+/* ---------- Âm thanh ---------- */
+let audioCtx = null, isAudioPlaying = false;
+
+function setSoundUI(on) {
+  document.getElementById('soundIcon').textContent = on ? '🔊' : '🔇';
+  document.getElementById('soundText').textContent = on ? 'Tắt Âm Thanh' : 'Bật Âm Thanh';
+  document.getElementById('soundBtn').classList.toggle('bg-cyan-900/50', on);
+  document.getElementById('soundBtn').classList.toggle('border-cyan-400', on);
+}
+
+function toggleSound() {
+  if (!isAudioPlaying) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const size = 2 * audioCtx.sampleRate;
+      const buf = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+      const out = buf.getChannelData(0);
+      let last = 0;
+      for (let i = 0; i < size; i++) {
+        const white = Math.random() * 2 - 1;
+        out[i] = (last + 0.02 * white) / 1.02;
+        last = out[i];
+        out[i] *= 3.5;
+      }
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'lowpass'; filter.frequency.value = 350;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.15;
+      src.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+      src.start(0);
+      isAudioPlaying = true;
+      setSoundUI(true);
+    } catch (e) { console.log('Audio error:', e); }
+  } else {
+    if (audioCtx) audioCtx.close();
+    audioCtx = null; isAudioPlaying = false;
+    setSoundUI(false);
+  }
+}
+document.getElementById('soundBtn').addEventListener('click', toggleSound);
+
+function playSplashSound() {
+  if (!isAudioPlaying || !audioCtx) return;
+  try {
+    const t = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300, t);
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
+    g.gain.setValueAtTime(0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(); osc.stop(t + 0.15);
+  } catch (e) {}
+}
+
+/* ---------- Đối tượng ---------- */
+class Bubble {
+  constructor() { this.reset(); this.y = Math.random() * H; }
+  reset() {
+    this.x = Math.random() * W;
+    this.y = H + Math.random() * 50;
+    this.radius = Math.random() * 4 + 1.5;
+    this.speed = Math.random() * 1.5 + 0.8;
+    this.wobbleSpeed = Math.random() * 0.05 + 0.02;
+    this.wobbleDist = Math.random() * 15 + 5;
+    this.initialX = this.x;
+    this.angle = Math.random() * Math.PI * 2;
+  }
+  update(dt) {
+    this.y -= this.speed * dt;
+    this.angle += this.wobbleSpeed * dt;
+    this.x = this.initialX + Math.sin(this.angle) * this.wobbleDist;
+    if (this.y < -20) this.reset();
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 0.8; ctx.stroke();
+  }
+}
+
+class Food {
+  constructor(x, y) { this.x = x; this.y = y; this.vy = Math.random() * 0.5 + 0.5; this.radius = 3; this.eaten = false; }
+  update(dt) { this.y += this.vy * dt; this.x += Math.sin(this.y * 0.05) * 0.3 * dt; }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#d97706'; ctx.shadowColor = '#f59e0b'; ctx.shadowBlur = 6;
+    ctx.fill(); ctx.shadowBlur = 0;
+  }
+}
+
+class Plant {
+  constructor(x, segments, height, color) {
+    this.x = x; this.segments = segments; this.height = height; this.color = color;
+    const seg = height / segments;
+    this.points = [];
+    for (let i = 0; i <= segments; i++) this.points.push({ x, y: H - i * seg, ox: x });
+  }
+  update(time) {
+    for (let i = 1; i <= this.segments; i++) {
+      const f = i / this.segments;
+      this.points[i].x = this.points[i].ox + Math.sin(time * 0.002 + this.x * 0.01 + i * 0.3) * (f * 18);
+    }
+  }
+  draw() {
+    const p = this.points;
+    ctx.beginPath();
+    ctx.moveTo(p[0].x, p[0].y);
+    for (let i = 0; i < p.length - 1; i++) {
+      ctx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2);
+    }
+    ctx.strokeStyle = this.color; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.stroke();
+  }
+}
+
+const FISH = {
+  goldfish: { size: 32, c: { body: '#f97316', secondary: '#ef4444' } },
+  neon:     { size: 16, c: { body: '#06b6d4', secondary: '#3b82f6' } },
+  angelfish:{ size: 38, c: { body: '#e2e8f0', secondary: '#0284c7' } },
+  koi:      { size: 48, c: { body: '#f8fafc', secondary: '#dc2626' } }
+};
+const FLOOR = 120; // vùng đáy cá không xuống tới (thức ăn cũng bị xóa ở đây)
+const shortAngle = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
+
+class Fish {
+  constructor(type) {
+    this.type = type;
+    this.size = FISH[type].size;
+    this.bodyColor = FISH[type].c;
+    this.x = Math.random() * W;
+    this.y = Math.random() * (H * 0.6) + H * 0.2;
+    this.vx = (Math.random() - 0.5) * 2;
+    this.vy = (Math.random() - 0.5) * 0.6;
+    this.targetX = this.x; this.targetY = this.y;
+    this.speed = Math.random() * 1.2 + 1.0;
+    this.tailAngle = 0; this.timer = 0;
+    this.angle = Math.atan2(this.vy, this.vx);
+  }
+  update(foods, dt) {
+    this.timer += dt;
+    let closest = null, minDist = 300;
+    for (const f of foods) {
+      if (f.eaten) continue;
+      const d = Math.hypot(f.x - this.x, f.y - this.y);
+      if (d < minDist) { minDist = d; closest = f; }
+    }
+    if (closest) {
+      this.targetX = closest.x; this.targetY = closest.y;
+      if (minDist < 15) closest.eaten = true;
+    } else if (this.timer > 150 + Math.random() * 150) {
+      this.targetX = Math.random() * (W - 100) + 50;
+      this.targetY = Math.random() * (H * 0.65 - 100) + 80;
+      this.timer = 0;
+    }
+    const a = Math.atan2(this.targetY - this.y, this.targetX - this.x);
+    const maxV = closest ? this.speed * 1.5 : this.speed * 0.8;
+    this.vx += Math.cos(a) * 0.1 * dt;
+    this.vy += Math.sin(a) * 0.1 * dt;
+    const v = Math.hypot(this.vx, this.vy);
+    if (v > maxV) { this.vx = this.vx / v * maxV; this.vy = this.vy / v * maxV; }
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    this.tailAngle += v * 0.25 * dt;
+    // làm mượt góc quay
+    if (v > 0.05) this.angle += shortAngle(this.angle, Math.atan2(this.vy, this.vx)) * Math.min(1, 0.12 * dt);
+
+    if (this.x < 50) { this.targetX = W - 100; this.vx += 0.5; }
+    if (this.x > W - 50) { this.targetX = 100; this.vx -= 0.5; }
+    if (this.y < 60) { this.targetY = 100; this.vy += 0.5; }
+    if (this.y > H - FLOOR) { this.targetY = H - FLOOR - 60; this.vy -= 0.5; }
+  }
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+    if (Math.cos(this.angle) < 0) ctx.scale(1, -1);
+    const s = this.size, c = this.bodyColor, w = Math.sin(this.tailAngle) * 8;
+
+    if (this.type === 'goldfish') {
+      ctx.beginPath(); ctx.ellipse(0, 0, s, s * 0.6, 0, 0, Math.PI * 2); ctx.fillStyle = c.body; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 0.8, 0); ctx.lineTo(-s * 1.6, -s * 0.7 + w); ctx.lineTo(-s * 1.4, 0); ctx.lineTo(-s * 1.6, s * 0.7 + w); ctx.closePath(); ctx.fillStyle = c.secondary; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 0.2, -s * 0.5); ctx.lineTo(s * 0.2, -s * 0.9); ctx.lineTo(s * 0.4, -s * 0.5); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.5, -s * 0.15, s * 0.12, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.53, -s * 0.15, s * 0.05, 0, Math.PI * 2); ctx.fillStyle = '#000'; ctx.fill();
+    } else if (this.type === 'neon') {
+      ctx.beginPath(); ctx.ellipse(0, 0, s, s * 0.4, 0, 0, Math.PI * 2); ctx.fillStyle = c.body; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 0.8, -s * 0.05); ctx.lineTo(s * 0.6, -s * 0.05); ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-s, 0); ctx.lineTo(-s * 1.4, -s * 0.4 + w * 0.8); ctx.lineTo(-s * 1.4, s * 0.4 + w * 0.8); ctx.closePath(); ctx.fillStyle = c.secondary; ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.6, -s * 0.05, s * 0.15, 0, Math.PI * 2); ctx.fillStyle = '#000'; ctx.fill();
+    } else if (this.type === 'angelfish') {
+      ctx.save(); ctx.rotate(-Math.PI / 2);
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 1.2, s * 0.7, 0, 0, Math.PI * 2); ctx.fillStyle = c.body; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0, -s * 1.2); ctx.lineTo(0, -s * 2.2 + w); ctx.strokeStyle = c.secondary; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+      ctx.beginPath(); ctx.arc(s * 0.3, -s * 0.2, s * 0.12, 0, Math.PI * 2); ctx.fillStyle = '#000'; ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.ellipse(0, 0, s, s * 0.5, 0, 0, Math.PI * 2); ctx.fillStyle = c.body; ctx.fill();
+      ctx.beginPath(); ctx.ellipse(-s * 0.2, -s * 0.05, s * 0.5, s * 0.3, 0, 0, Math.PI * 2); ctx.fillStyle = c.secondary; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 0.9, 0); ctx.lineTo(-s * 1.7, -s * 0.8 + w); ctx.lineTo(-s * 1.3, 0); ctx.lineTo(-s * 1.7, s * 0.8 + w); ctx.closePath(); ctx.fillStyle = c.secondary; ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.6, -s * 0.1, s * 0.1, 0, Math.PI * 2); ctx.fillStyle = '#000'; ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+/* ---------- Khởi tạo ---------- */
+resizeCanvas();
+const bubbles = Array.from({ length: 45 }, () => new Bubble());
+let plants = [];
+function createPlants() {
+  plants = [];
+  for (let x = 80; x < W; x += 120) {
+    const h = Math.random() * 200 + 220;
+    plants.push(new Plant(x, 8, h, Math.random() > 0.5 ? '#047857' : '#059669'));
+    plants.push(new Plant(x + 35, 6, h * 0.75, '#10b981'));
+  }
+}
+createPlants();
+window.addEventListener('resize', () => { resizeCanvas(); createPlants(); });
+
+const fishes = ['koi','koi','goldfish','goldfish','goldfish','neon','neon','neon','neon','neon'].map(t => new Fish(t));
+const foods = [], ripples = [];
+
+window.addEventListener('click', (e) => {
+  if (e.target.closest('.ui-panel')) return;
+  foods.push(new Food(e.clientX, Math.min(e.clientY, H - FLOOR - 10)));
+  playSplashSound();
+  ripples.push({ x: e.clientX, y: e.clientY, radius: 5, maxRadius: 60, alpha: 0.8 });
+});
+document.getElementById('feedBtn').addEventListener('click', () => {
+  for (let i = 0; i < 5; i++) foods.push(new Food(Math.random() * (W - 200) + 100, Math.random() * 80 + 40));
+  playSplashSound();
+});
+
+/* ---------- Vòng lặp ---------- */
+let animTime = 0, lastTs = 0;
+function animate(ts) {
+  const dt = lastTs ? Math.min((ts - lastTs) / 16.667, 3) : 1; // chuẩn hóa theo 60fps
+  lastTs = ts; animTime += dt;
+
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0284c7'); bg.addColorStop(0.3, '#0369a1'); bg.addColorStop(0.8, '#0f172a'); bg.addColorStop(1, '#020617');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  for (let i = 0; i < W; i += 180) {
+    const sh = Math.sin(animTime * 0.01 + i) * 40;
+    ctx.beginPath(); ctx.moveTo(i + sh, 0); ctx.lineTo(i + sh + 100, 0); ctx.lineTo(i + sh + 300, H); ctx.lineTo(i + sh + 180, H); ctx.closePath(); ctx.fill();
+  }
+
+  plants.forEach(p => { p.update(animTime); p.draw(); });
+
+  const sand = ctx.createLinearGradient(0, H - 80, 0, H);
+  sand.addColorStop(0, '#d97706'); sand.addColorStop(0.3, '#b45309'); sand.addColorStop(1, '#78350f');
+  ctx.fillStyle = sand;
+  ctx.beginPath(); ctx.moveTo(0, H - 50);
+  ctx.bezierCurveTo(W * 0.3, H - 90, W * 0.7, H - 30, W, H - 60);
+  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+
+  [[100, 30, 45, 25, '#475569'], [170, 20, 30, 18, '#64748b'], [W - 150, 25, 55, 30, '#334155'], [W - 240, 20, 35, 20, '#475569'], [W * 0.5, 25, 50, 28, '#4e5d6c']]
+    .forEach(([x, oy, rx, ry, col]) => {
+      ctx.beginPath(); ctx.ellipse(x, H - oy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 2; ctx.stroke();
+    });
+
+  bubbles.forEach(b => { b.update(dt); b.draw(); });
+
+  for (let i = foods.length - 1; i >= 0; i--) {
+    foods[i].update(dt); foods[i].draw();
+    if (foods[i].eaten || foods[i].y > H - FLOOR + 10) foods.splice(i, 1);
+  }
+
+  fishes.forEach(f => { f.update(foods, dt); f.draw(); });
+
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i];
+    r.radius += 1.5 * dt; r.alpha -= 0.02 * dt;
+    if (r.alpha <= 0 || r.radius > r.maxRadius) { ripples.splice(i, 1); continue; }
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,255,255,${r.alpha})`; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
